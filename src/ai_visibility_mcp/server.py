@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 from typing import Any
-from urllib.parse import urljoin, urlsplit
 
 import httpx
 from dotenv import load_dotenv
@@ -162,18 +161,34 @@ async def check_ai_bot_access(domain: str) -> dict[str, Any]:
     return await check_ai_bot_access_impl(domain)
 
 
-async def _fetch_optional(url: str) -> tuple[int, dict[str, str], str]:
+async def _fetch_optional(url: str) -> tuple[int, dict[str, str], str, str | None]:
+    """Like _fetch but never raises. Returns (status, headers, body, error_kind).
+
+    error_kind is None on success or a short class name on failure
+    (e.g. 'ConnectError', 'ReadTimeout') so callers can distinguish
+    "site says no" from "we couldn't reach the site at all".
+    """
     try:
-        return await _fetch(url)
-    except httpx.HTTPError:
-        return 0, {}, ""
+        s, h, b = await _fetch(url)
+        return s, h, b, None
+    except httpx.HTTPError as exc:
+        return 0, {}, "", exc.__class__.__name__
 
 
 async def audit_ai_visibility_impl(domain: str) -> dict[str, Any]:
     base = normalize_domain(domain)
     bot_access = await check_ai_bot_access_impl(domain)
+    if "error" in bot_access and "robots_txt" not in bot_access:
+        return {
+            "domain": base,
+            "score": 0,
+            "error": bot_access["error"],
+            "warnings": [
+                "robots.txt unreachable — cannot audit. Verify the domain is correct and the site is up."
+            ],
+        }
 
-    root_status, _, root_body = await _fetch_optional(base + "/")
+    root_status, _, root_body, root_err = await _fetch_optional(base + "/")
     onpage = parse_html(root_body) if root_status == 200 else {
         "title": None, "description": None, "ai_meta_tags": {},
         "open_graph": {}, "jsonld_count": 0, "jsonld_errors": [], "schema_types": [],
@@ -184,14 +199,14 @@ async def audit_ai_visibility_impl(domain: str) -> dict[str, Any]:
     if "robots" in onpage["ai_meta_tags"]:
         robots_flags = interpret_meta_robots(onpage["ai_meta_tags"]["robots"])
 
-    sitemap_status, _, sitemap_body = await _fetch_optional(base + "/sitemap.xml")
+    sitemap_status, _, sitemap_body, sitemap_err = await _fetch_optional(base + "/sitemap.xml")
     sitemap_present = sitemap_status == 200 and (
         "<urlset" in sitemap_body or "<sitemapindex" in sitemap_body
     )
     sitemap_url_count = sitemap_body.count("<loc>") if sitemap_status == 200 else 0
 
-    llms_status, _, llms_body = await _fetch_optional(base + "/llms.txt")
-    llms_full_status, _, _ = await _fetch_optional(base + "/llms-full.txt")
+    llms_status, _, llms_body, llms_err = await _fetch_optional(base + "/llms.txt")
+    llms_full_status, _, _, llms_full_err = await _fetch_optional(base + "/llms-full.txt")
 
     warnings: list[str] = list(bot_access.get("warnings", []))
     score = 100
@@ -256,11 +271,24 @@ async def audit_ai_visibility_impl(domain: str) -> dict[str, Any]:
 
     score = max(0, min(100, score))
 
+    network_failures = {
+        "root": root_err,
+        "sitemap": sitemap_err,
+        "llms_txt": llms_err,
+        "llms_full_txt": llms_full_err,
+    }
+    failure_count = sum(1 for v in network_failures.values() if v)
+    if failure_count >= 3:
+        warnings.append(
+            f"network unreachable on {failure_count}/4 audit URLs — score may be misleading"
+        )
+
     return {
         "domain": base,
         "score": score,
         "score_reasons": score_reasons,
         "warnings": warnings,
+        "network_failures": network_failures,
         "bot_access_summary": bot_access.get("summary", {}),
         "cloudflare": bot_access.get("cloudflare", {}),
         "on_page": {
@@ -397,6 +425,9 @@ async def check_llm_mention(
     return await check_llm_mention_impl(brand, query, aliases, models)
 
 
+MAX_PARALLEL_COMPETITORS = 10
+
+
 async def compare_competitors_impl(
     your_domain: str, competitor_domains: list[str]
 ) -> dict[str, Any]:
@@ -404,7 +435,13 @@ async def compare_competitors_impl(
         return {"error": "competitor_domains must contain at least one entry"}
 
     all_domains = [your_domain] + list(competitor_domains)
-    results = await asyncio.gather(*(audit_ai_visibility_impl(d) for d in all_domains))
+    sem = asyncio.Semaphore(MAX_PARALLEL_COMPETITORS)
+
+    async def bounded(d: str) -> dict[str, Any]:
+        async with sem:
+            return await audit_ai_visibility_impl(d)
+
+    results = await asyncio.gather(*(bounded(d) for d in all_domains))
 
     rows = []
     for d, r in zip(all_domains, results):
