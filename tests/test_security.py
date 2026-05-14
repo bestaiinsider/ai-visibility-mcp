@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 from ai_visibility_mcp.llm import (
