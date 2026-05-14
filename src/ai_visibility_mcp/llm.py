@@ -6,6 +6,7 @@ ceiling is shared across all providers in a single tool call.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from dataclasses import dataclass
@@ -59,12 +60,36 @@ def _est_cost(model_key: str, tokens_in: int, tokens_out: int) -> float:
 
 
 async def _post_json(
-    url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float = 30.0
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    timeout: float = 30.0,
+    retries: int = 2,
 ) -> dict[str, Any]:
+    delay = 1.5
+    last_exc: httpx.HTTPError | None = None
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        return resp.json()
+        for attempt in range(retries + 1):
+            try:
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code in (429, 502, 503, 504) and attempt < retries:
+                    retry_after = resp.headers.get("retry-after")
+                    wait = float(retry_after) if retry_after and retry_after.isdigit() else delay
+                    await asyncio.sleep(min(wait, 8.0))
+                    delay *= 2
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt < retries:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                    continue
+                raise
+    if last_exc:
+        raise last_exc
+    raise httpx.HTTPError("exhausted retries with no response")
 
 
 async def query_perplexity(

@@ -14,7 +14,7 @@ import httpx
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-from .audit import interpret_meta_robots, parse_html
+from .audit import detect_spa_shell, interpret_meta_robots, parse_html
 from .bots import KNOWN_AI_BOTS
 from .llm import (
     LLMAnswer,
@@ -178,6 +178,7 @@ async def audit_ai_visibility_impl(domain: str) -> dict[str, Any]:
         "title": None, "description": None, "ai_meta_tags": {},
         "open_graph": {}, "jsonld_count": 0, "jsonld_errors": [], "schema_types": [],
     }
+    spa = detect_spa_shell(root_body if root_status == 200 else "")
 
     robots_flags: dict[str, Any] = {}
     if "robots" in onpage["ai_meta_tags"]:
@@ -237,6 +238,15 @@ async def audit_ai_visibility_impl(domain: str) -> dict[str, Any]:
         score_reasons.append("-5: no /sitemap.xml")
         warnings.append("no /sitemap.xml found at root")
 
+    if spa.get("likely_spa_shell"):
+        score -= 20
+        score_reasons.append("-20: likely empty SPA shell on server-render")
+        warnings.append(
+            "homepage looks like an empty JS-app shell — AI bots that don't run "
+            "JS (GPTBot, ClaudeBot, PerplexityBot) will see nothing. "
+            "Enable SSR / SSG / prerender."
+        )
+
     has_llms_txt = llms_status == 200
     has_llms_full = llms_full_status == 200
     if has_llms_txt:
@@ -263,6 +273,7 @@ async def audit_ai_visibility_impl(domain: str) -> dict[str, Any]:
             "jsonld_errors": onpage["jsonld_errors"],
             "schema_types": onpage["schema_types"],
         },
+        "spa_shell": spa,
         "sitemap": {
             "url": base + "/sitemap.xml",
             "present": bool(sitemap_present),

@@ -47,6 +47,46 @@ AI_META_NAMES = {
 }
 
 
+VISIBLE_TEXT_RE = re.compile(
+    r"<(?:p|h[1-6]|li|article|section|main|td|a)\b[^>]*>(.*?)</(?:p|h[1-6]|li|article|section|main|td|a)>",
+    re.IGNORECASE | re.DOTALL,
+)
+TAG_RE = re.compile(r"<[^>]+>")
+
+
+def detect_spa_shell(html: str) -> dict[str, Any]:
+    """Heuristic: did the server return an empty SPA shell?
+
+    Empty shells will be invisible to AI bots that don't execute JS
+    (GPTBot, ClaudeBot, PerplexityBot all skip JS as of 2026-05).
+    """
+    if not html:
+        return {"likely_spa_shell": False, "visible_text_chars": 0, "reason": None}
+    visible_chunks = VISIBLE_TEXT_RE.findall(html)
+    text_only = " ".join(TAG_RE.sub(" ", c) for c in visible_chunks)
+    text_chars = len(re.sub(r"\s+", " ", text_only).strip())
+
+    has_root_div = bool(re.search(r'<(?:div|main)\b[^>]*\bid\s*=\s*[\"\']?(?:root|app|__next|gatsby)', html, re.IGNORECASE))
+    has_next_data = "__NEXT_DATA__" in html
+    has_nuxt = "__NUXT__" in html
+    has_react_root = "react-dom" in html.lower() or has_root_div
+    js_signals = sum([has_root_div, has_next_data, has_nuxt, has_react_root])
+
+    likely = text_chars < 500 and js_signals >= 1
+    reason = None
+    if likely:
+        reason = (
+            f"only {text_chars} chars of server-rendered text; "
+            f"JS-app signals: {js_signals}"
+        )
+    return {
+        "likely_spa_shell": likely,
+        "visible_text_chars": text_chars,
+        "js_app_signals": js_signals,
+        "reason": reason,
+    }
+
+
 def parse_html(html: str) -> dict[str, Any]:
     metas: dict[str, str] = {}
     for m in META_RE.finditer(html):
