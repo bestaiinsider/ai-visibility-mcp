@@ -7,9 +7,12 @@ ceiling is shared across all providers in a single tool call.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -104,7 +107,11 @@ async def query_perplexity(
         data = await _post_json(
             PERPLEXITY_URL,
             {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            {"model": model, "messages": [{"role": "user", "content": query}]},
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": query}],
+                "max_tokens": int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1024")),
+            },
         )
     except httpx.HTTPError as exc:
         return LLMAnswer("perplexity", model, "", [], False, None, 0.0, 0, 0,
@@ -143,7 +150,11 @@ async def query_openrouter(
                 "HTTP-Referer": "https://github.com/sanders-ops/ai-visibility-mcp",
                 "X-Title": "ai-visibility-mcp",
             },
-            {"model": model, "messages": [{"role": "user", "content": query}]},
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": query}],
+                "max_tokens": int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1024")),
+            },
         )
     except httpx.HTTPError as exc:
         return LLMAnswer("openrouter", model, "", [], False, None, 0.0, 0, 0,
@@ -167,3 +178,72 @@ def cost_ceiling() -> float:
         return float(os.getenv("MAX_COST_PER_CALL", "0.10"))
     except ValueError:
         return 0.10
+
+
+def daily_cap() -> float:
+    try:
+        return float(os.getenv("MAX_DAILY_USD", "5.00"))
+    except ValueError:
+        return 5.00
+
+
+def _spend_path() -> Path:
+    override = os.getenv("AI_VISIBILITY_SPEND_FILE")
+    if override:
+        return Path(override)
+    base = Path(os.getenv("XDG_CACHE_HOME") or (Path.home() / ".cache"))
+    return base / "ai-visibility-mcp" / "spend.json"
+
+
+def _today_key() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def read_daily_spend() -> float:
+    p = _spend_path()
+    if not p.exists():
+        return 0.0
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError):
+        return 0.0
+    return float(data.get(_today_key(), 0.0))
+
+
+def record_spend(amount_usd: float) -> float:
+    if amount_usd <= 0:
+        return read_daily_spend()
+    p = _spend_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    today = _today_key()
+    data: dict[str, float] = {}
+    if p.exists():
+        try:
+            raw = json.loads(p.read_text())
+            if isinstance(raw, dict):
+                data = {k: float(v) for k, v in raw.items() if isinstance(v, (int, float))}
+        except (OSError, json.JSONDecodeError):
+            data = {}
+    cutoff_ts = time.time() - 14 * 86400
+    data = {
+        k: v for k, v in data.items()
+        if time.mktime(time.strptime(k, "%Y-%m-%d")) >= cutoff_ts
+    } if data else {}
+    data[today] = data.get(today, 0.0) + amount_usd
+    p.write_text(json.dumps(data, indent=2, sort_keys=True))
+    return data[today]
+
+
+class DailyCapReached(RuntimeError):
+    pass
+
+
+def assert_under_daily_cap(predicted_cost: float = 0.0) -> tuple[float, float]:
+    cap = daily_cap()
+    spent = read_daily_spend()
+    if spent + predicted_cost > cap:
+        raise DailyCapReached(
+            f"daily LLM spend ceiling ${cap:.2f} reached (today: ${spent:.4f}); "
+            f"refusing further calls. Override with MAX_DAILY_USD env var."
+        )
+    return spent, cap

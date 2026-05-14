@@ -7,7 +7,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
+import os
+import socket
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from dotenv import load_dotenv
@@ -16,26 +20,83 @@ from fastmcp import FastMCP
 from .audit import detect_spa_shell, interpret_meta_robots, parse_html
 from .bots import KNOWN_AI_BOTS
 from .llm import (
+    PRICES,
+    DailyCapReached,
     LLMAnswer,
+    assert_under_daily_cap,
     cost_ceiling,
+    daily_cap,
     query_openrouter,
     query_perplexity,
+    read_daily_spend,
+    record_spend,
 )
 from .robots import access_for, normalize_domain, parse
 
 load_dotenv()
 
-USER_AGENT = "ai-visibility-mcp/0.1 (+https://github.com/sanders-ops/ai-visibility-mcp)"
+USER_AGENT = "ai-visibility-mcp/0.2 (+https://github.com/sanders-ops/ai-visibility-mcp)"
 HTTP_TIMEOUT = 15.0
+
+PRIVATE_NETS: tuple[ipaddress._BaseNetwork, ...] = (
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local incl. AWS/GCP/Azure IMDS
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
+
+
+class SSRFBlocked(ValueError):
+    """Raised when a target URL resolves to a private / link-local address."""
+
+
+def _assert_public_url(url: str) -> None:
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise SSRFBlocked(f"refusing non-HTTP scheme: {parts.scheme!r}")
+    host = parts.hostname
+    if not host:
+        raise SSRFBlocked("missing host in URL")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise SSRFBlocked(f"DNS resolution failed for {host!r}: {exc}") from exc
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        for net in PRIVATE_NETS:
+            if ip in net:
+                raise SSRFBlocked(
+                    f"refusing private/link-local address {ip} for host {host!r}"
+                )
 
 mcp = FastMCP("ai-visibility-mcp")
 
 
 async def _fetch(url: str) -> tuple[int, dict[str, str], str]:
+    _assert_public_url(url)
+
+    async def _redirect_guard(response: httpx.Response) -> None:
+        loc = response.headers.get("location")
+        if loc:
+            target = str(response.request.url.join(loc))
+            _assert_public_url(target)
+
     async with httpx.AsyncClient(
         follow_redirects=True,
         timeout=HTTP_TIMEOUT,
         headers={"User-Agent": USER_AGENT},
+        event_hooks={"response": [_redirect_guard]},
     ) as client:
         resp = await client.get(url)
         return resp.status_code, dict(resp.headers), resp.text
@@ -67,6 +128,11 @@ async def check_ai_bot_access_impl(domain: str) -> dict[str, Any]:
     warnings: list[str] = []
     try:
         rstatus, rheaders, rbody = await _fetch(robots_url)
+    except SSRFBlocked as exc:
+        return {
+            "domain": base,
+            "error": f"refused: {exc}",
+        }
     except httpx.HTTPError as exc:
         return {
             "domain": base,
@@ -83,7 +149,7 @@ async def check_ai_bot_access_impl(domain: str) -> dict[str, Any]:
 
     try:
         root_status, root_headers, root_body = await _fetch(base + "/")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, SSRFBlocked) as exc:
         root_status, root_headers, root_body = 0, {}, ""
         warnings.append(f"failed to fetch root: {exc.__class__.__name__}")
 
@@ -171,6 +237,8 @@ async def _fetch_optional(url: str) -> tuple[int, dict[str, str], str, str | Non
     try:
         s, h, b = await _fetch(url)
         return s, h, b, None
+    except SSRFBlocked as exc:
+        return 0, {}, "", f"SSRFBlocked: {exc}"
     except httpx.HTTPError as exc:
         return 0, {}, "", exc.__class__.__name__
 
@@ -346,14 +414,38 @@ async def check_llm_mention_impl(
         "openrouter:google/gemini-2.0-flash-001",
     ]
 
+    try:
+        daily_before, cap = assert_under_daily_cap(0.0)
+    except DailyCapReached as exc:
+        return {
+            "error": str(exc),
+            "daily_spend_usd": read_daily_spend(),
+            "daily_cap_usd": daily_cap(),
+        }
+
     answers: list[LLMAnswer] = []
     spent = 0.0
     skipped: list[str] = []
+    max_out = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1024"))
 
     for m in chosen:
-        if spent >= ceiling:
-            skipped.append(f"{m} (cost ceiling ${ceiling:.4f} hit at ${spent:.4f})")
+        predicted_max = 0.0
+        price = PRICES.get(m)
+        if price:
+            predicted_max = (max_out / 1_000_000) * price[1]
+
+        if spent + predicted_max > ceiling:
+            skipped.append(
+                f"{m} (per-call ceiling ${ceiling:.4f} would be exceeded; "
+                f"spent ${spent:.4f}, next call max ${predicted_max:.4f})"
+            )
             continue
+        try:
+            assert_under_daily_cap(predicted_max)
+        except DailyCapReached as exc:
+            skipped.append(f"{m} (daily cap hit: {exc})")
+            break
+
         if m.startswith("perplexity:"):
             ans = await query_perplexity(query, brand, aliases, model=m.split(":", 1)[1])
         elif m.startswith("openrouter:"):
@@ -363,6 +455,7 @@ async def check_llm_mention_impl(
             continue
         answers.append(ans)
         spent += ans.est_cost_usd
+        record_spend(ans.est_cost_usd)
 
     by_model = []
     citations_union: set[str] = set()
@@ -397,6 +490,8 @@ async def check_llm_mention_impl(
             "share_of_voice": round(mention_count / len(answers), 3) if answers else 0.0,
             "est_total_cost_usd": total_cost,
             "cost_ceiling_usd": ceiling,
+            "daily_spend_usd": round(read_daily_spend(), 6),
+            "daily_cap_usd": daily_cap(),
         },
         "citations": sorted(citations_union),
         "by_model": by_model,
