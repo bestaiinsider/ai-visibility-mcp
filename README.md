@@ -33,7 +33,7 @@ Most websites are accidentally invisible to AI search. Cloudflare's bot-manageme
 Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/sanders-ops/ai-visibility-mcp
+git clone https://github.com/krissanders/ai-visibility-mcp
 cd ai-visibility-mcp
 uv sync
 cp .env.example .env  # fill in PERPLEXITY_API_KEY / OPENROUTER_API_KEY

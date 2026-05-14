@@ -147,7 +147,7 @@ async def query_openrouter(
             {
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/sanders-ops/ai-visibility-mcp",
+                "HTTP-Referer": "https://github.com/krissanders/ai-visibility-mcp",
                 "X-Title": "ai-visibility-mcp",
             },
             {

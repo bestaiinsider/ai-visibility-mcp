@@ -35,7 +35,7 @@ from .robots import access_for, normalize_domain, parse
 
 load_dotenv()
 
-USER_AGENT = "ai-visibility-mcp/0.2 (+https://github.com/sanders-ops/ai-visibility-mcp)"
+USER_AGENT = "ai-visibility-mcp/0.2 (+https://github.com/krissanders/ai-visibility-mcp)"
 HTTP_TIMEOUT = 15.0
 
 PRIVATE_NETS: tuple[ipaddress._BaseNetwork, ...] = (
