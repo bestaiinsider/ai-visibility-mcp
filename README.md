@@ -1,19 +1,21 @@
 # ai-visibility-mcp
 
-> MCP server that audits how AI sees your website. Robots, schema, LLM mentions, Cloudflare AI defaults — all in one tool call.
+> MCP server that audits **and fixes** how AI sees your website. Robots, schema, LLM mentions, Cloudflare AI defaults — audit the problem, generate the fix, re-audit in one loop.
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/) [![MCP](https://img.shields.io/badge/MCP-server-purple)](https://modelcontextprotocol.io/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Most websites are accidentally invisible to AI search. Cloudflare's bot-management defaults block GPTBot / ClaudeBot / PerplexityBot. SPAs render an empty `<div id="root">` to crawlers that don't run JS. Marketing teams have no idea their brand isn't surfacing in ChatGPT, Claude, or Perplexity answers — until traffic dries up.
 
-`ai-visibility-mcp` answers four questions from any MCP client:
+`ai-visibility-mcp` closes the audit-and-fix loop inside a single agent session:
 
-1. Can AI bots read this site?
-2. What does the structured-data + meta-robots story look like to an LLM?
-3. Does this brand surface in LLM-generated answers — and which models?
-4. How does this site compare to its competitors?
+1. **Audit** — find what's blocking AI visibility
+2. **Fix** — generate the artifact that corrects it
+3. **Paste** — site owner applies the output
+4. **Re-audit** — verify the fix was picked up
 
 ## Tools
+
+### Audit tools
 
 | Tool | Purpose | Needs API keys? |
 |---|---|---|
@@ -21,6 +23,14 @@ Most websites are accidentally invisible to AI search. Cloudflare's bot-manageme
 | `audit_ai_visibility(domain)` | 0-100 composite score with explainable deductions (robots, meta, JSON-LD, sitemap, llms.txt, SPA shell) | No |
 | `check_llm_mention(brand, query, aliases?, models?)` | Cross-model brand surfacing (Perplexity sonar + OpenAI gpt-4o-mini + Gemini 2.0 Flash by default) | Yes |
 | `compare_competitors(your_domain, competitor_domains[])` | Parallel ranked audit, max 10 in flight | No |
+
+### Generator tools (v0.3)
+
+| Tool | Purpose | LLM call? |
+|---|---|---|
+| `generate_robots_patch(domain, allow_bots?, deny_bots?)` | Corrected robots.txt that opens access to AI bots; preserves existing rules; detects Cloudflare | No |
+| `generate_json_ld(url, page_type?)` | Schema.org JSON-LD block for any page; auto-detects type (Product/Article/Organization/FAQPage/SoftwareApplication/WebSite); validates required fields | Yes (gpt-4o-mini) |
+| `generate_llms_txt(domain, crawl_depth?, max_pages?)` | spec-compliant llms.txt; crawls homepage + sitemap; graceful fallback to link extraction | Yes (gpt-4o-mini) |
 
 ## Why this exists
 
@@ -33,7 +43,7 @@ Most websites are accidentally invisible to AI search. Cloudflare's bot-manageme
 Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/krissanders/ai-visibility-mcp
+git clone https://github.com/bestaiinsider/ai-visibility-mcp
 cd ai-visibility-mcp
 uv sync
 cp .env.example .env  # fill in PERPLEXITY_API_KEY / OPENROUTER_API_KEY
@@ -62,6 +72,39 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Deskto
     }
   }
 }
+```
+
+## Audit-and-fix loop
+
+```
+# Step 1 — audit
+> audit_ai_visibility(domain="example.com")
+  score: 55
+  warnings:
+    - "9/22 AI bots disallowed — site largely invisible to AI search"
+    - "no JSON-LD structured data — LLMs lose entity grounding"
+    - "no /llms.txt found at root"
+
+# Step 2 — generate fixes
+> generate_robots_patch(domain="example.com")
+  → new_robots: "User-agent: GPTBot\nAllow: /\n\nUser-agent: ClaudeBot\nAllow: /\n..."
+  → diff:       unified diff of exactly what changed
+  → paste_target: "/robots.txt at site root, replaces existing"
+
+> generate_json_ld(url="https://example.com/")
+  → page_type_detected: "Organization"
+  → script_tag: '<script type="application/ld+json">{"@context":"https://schema.org","@type":"Organization"...}</script>'
+  → paste_target: "inside <head> of the page"
+
+> generate_llms_txt(domain="example.com")
+  → content: "# Example Corp\n\n> One-sentence summary...\n\n## Pages\n- [Home](...): ..."
+  → paste_target: "/llms.txt"
+
+# Step 3 — site owner pastes the three artifacts
+
+# Step 4 — re-audit
+> audit_ai_visibility(domain="example.com")
+  score: 95   ← was 55
 ```
 
 ## Example session
@@ -117,13 +160,13 @@ This server makes outbound HTTP requests to caller-supplied domains and to LLM p
 
 ```bash
 uv sync --extra dev
-uv run pytest          # 24 tests
+uv run pytest          # 40 tests
 uv run ruff check .    # lint
 ```
 
 ## Status
 
-v0.2 — security-hardened, 24/24 tests, smoke-verified against tealhq.com / bandcamp.com / anthropic.com. `track_changes` (persistent diff over time) deferred to v0.3.
+v0.3 — audit + fix loop complete. 7 tools (4 audit + 3 generator), 40/40 tests, SSRF-hardened, spend-capped. Smoke-verified against tealhq.com / bandcamp.com / anthropic.com.
 
 ## License
 

@@ -35,7 +35,7 @@ from .robots import access_for, normalize_domain, parse
 
 load_dotenv()
 
-USER_AGENT = "ai-visibility-mcp/0.2 (+https://github.com/krissanders/ai-visibility-mcp)"
+USER_AGENT = "ai-visibility-mcp/0.2 (+https://github.com/bestaiinsider/ai-visibility-mcp)"
 HTTP_TIMEOUT = 15.0
 
 PRIVATE_NETS: tuple[ipaddress._BaseNetwork, ...] = (
@@ -76,9 +76,8 @@ def _assert_public_url(url: str) -> None:
             continue
         for net in PRIVATE_NETS:
             if ip in net:
-                raise SSRFBlocked(
-                    f"refusing private/link-local address {ip} for host {host!r}"
-                )
+                raise SSRFBlocked(f"refusing private/link-local address {ip} for host {host!r}")
+
 
 mcp = FastMCP("ai-visibility-mcp")
 
@@ -162,8 +161,10 @@ async def check_ai_bot_access_impl(domain: str) -> dict[str, Any]:
 
     bots_report: list[dict[str, Any]] = []
     for bot in KNOWN_AI_BOTS:
-        verdict = access_for(records, bot.ua, "/") if records else (
-            "allowed" if rstatus == 404 else "unspecified"
+        verdict = (
+            access_for(records, bot.ua, "/")
+            if records
+            else ("allowed" if rstatus == 404 else "unspecified")
         )
         has_explicit_rule = any(
             bot.ua.lower() in ua.strip().lower()
@@ -171,15 +172,17 @@ async def check_ai_bot_access_impl(domain: str) -> dict[str, Any]:
             for ua in rec.user_agents
             if ua.strip() != "*"
         )
-        bots_report.append({
-            "user_agent": bot.ua,
-            "vendor": bot.vendor,
-            "purpose": bot.purpose,
-            "verdict": verdict,
-            "rule_source": "explicit" if has_explicit_rule else (
-                "wildcard" if records else "default"
-            ),
-        })
+        bots_report.append(
+            {
+                "user_agent": bot.ua,
+                "vendor": bot.vendor,
+                "purpose": bot.purpose,
+                "verdict": verdict,
+                "rule_source": "explicit"
+                if has_explicit_rule
+                else ("wildcard" if records else "default"),
+            }
+        )
 
     allowed = sum(1 for b in bots_report if b["verdict"] == "allowed")
     disallowed = sum(1 for b in bots_report if b["verdict"] == "disallowed")
@@ -257,10 +260,19 @@ async def audit_ai_visibility_impl(domain: str) -> dict[str, Any]:
         }
 
     root_status, _, root_body, root_err = await _fetch_optional(base + "/")
-    onpage = parse_html(root_body) if root_status == 200 else {
-        "title": None, "description": None, "ai_meta_tags": {},
-        "open_graph": {}, "jsonld_count": 0, "jsonld_errors": [], "schema_types": [],
-    }
+    onpage = (
+        parse_html(root_body)
+        if root_status == 200
+        else {
+            "title": None,
+            "description": None,
+            "ai_meta_tags": {},
+            "open_graph": {},
+            "jsonld_count": 0,
+            "jsonld_errors": [],
+            "schema_types": [],
+        }
+    )
     spa = detect_spa_shell(root_body if root_status == 200 else "")
 
     robots_flags: dict[str, Any] = {}
@@ -293,7 +305,9 @@ async def audit_ai_visibility_impl(domain: str) -> dict[str, Any]:
     if robots_flags.get("noindex"):
         score -= 30
         score_reasons.append("-30: meta robots noindex on homepage")
-        warnings.append("homepage has `<meta name=robots content='noindex'>` — invisible to search/AI")
+        warnings.append(
+            "homepage has `<meta name=robots content='noindex'>` — invisible to search/AI"
+        )
     if robots_flags.get("noai") or robots_flags.get("noimageai"):
         score -= 15
         score_reasons.append("-15: meta robots noai / noimageai")
@@ -466,17 +480,19 @@ async def check_llm_mention_impl(
         for c in a.citations:
             if c:
                 citations_union.add(c)
-        by_model.append({
-            "provider": a.provider,
-            "model": a.model,
-            "mentioned": a.mentioned,
-            "matched_alias": a.matched_alias,
-            "answer_excerpt": (a.text or "")[:600],
-            "citations": a.citations,
-            "tokens": {"in": a.tokens_in, "out": a.tokens_out},
-            "est_cost_usd": a.est_cost_usd,
-            "error": a.error,
-        })
+        by_model.append(
+            {
+                "provider": a.provider,
+                "model": a.model,
+                "mentioned": a.mentioned,
+                "matched_alias": a.matched_alias,
+                "answer_excerpt": (a.text or "")[:600],
+                "citations": a.citations,
+                "tokens": {"in": a.tokens_in, "out": a.tokens_out},
+                "est_cost_usd": a.est_cost_usd,
+                "error": a.error,
+            }
+        )
 
     total_cost = round(sum(a.est_cost_usd for a in answers), 6)
     return {
@@ -540,23 +556,24 @@ async def compare_competitors_impl(
 
     rows = []
     for d, r in zip(all_domains, results):
-        rows.append({
-            "domain": r.get("domain", d),
-            "score": r.get("score", 0),
-            "bots_allowed": r.get("bot_access_summary", {}).get("allowed", 0),
-            "bots_disallowed": r.get("bot_access_summary", {}).get("disallowed", 0),
-            "has_jsonld": r.get("on_page", {}).get("jsonld_count", 0) > 0,
-            "schema_types": r.get("on_page", {}).get("schema_types", []),
-            "has_llms_txt": r.get("llms_txt", {}).get("llms_txt_present", False),
-            "sitemap_urls": r.get("sitemap", {}).get("url_count", 0),
-            "cloudflare_challenge": r.get("cloudflare", {}).get("likely_bot_challenge", False),
-        })
+        rows.append(
+            {
+                "domain": r.get("domain", d),
+                "score": r.get("score", 0),
+                "bots_allowed": r.get("bot_access_summary", {}).get("allowed", 0),
+                "bots_disallowed": r.get("bot_access_summary", {}).get("disallowed", 0),
+                "has_jsonld": r.get("on_page", {}).get("jsonld_count", 0) > 0,
+                "schema_types": r.get("on_page", {}).get("schema_types", []),
+                "has_llms_txt": r.get("llms_txt", {}).get("llms_txt_present", False),
+                "sitemap_urls": r.get("sitemap", {}).get("url_count", 0),
+                "cloudflare_challenge": r.get("cloudflare", {}).get("likely_bot_challenge", False),
+            }
+        )
 
     your_row = rows[0]
     competitor_rows = rows[1:]
     competitor_avg = (
-        sum(r["score"] for r in competitor_rows) / len(competitor_rows)
-        if competitor_rows else 0
+        sum(r["score"] for r in competitor_rows) / len(competitor_rows) if competitor_rows else 0
     )
     delta = your_row["score"] - competitor_avg
     rank = 1 + sum(1 for r in competitor_rows if r["score"] > your_row["score"])
@@ -572,9 +589,7 @@ async def compare_competitors_impl(
 
 
 @mcp.tool()
-async def compare_competitors(
-    your_domain: str, competitor_domains: list[str]
-) -> dict[str, Any]:
+async def compare_competitors(your_domain: str, competitor_domains: list[str]) -> dict[str, Any]:
     """Side-by-side AI-visibility audit: your_domain vs competitors.
 
     Runs `audit_ai_visibility` in parallel for all domains and returns a
@@ -586,6 +601,94 @@ async def compare_competitors(
         competitor_domains: list of competitor domains (at least 1)
     """
     return await compare_competitors_impl(your_domain, competitor_domains)
+
+
+@mcp.tool()
+async def generate_json_ld(
+    url: str,
+    page_type: str | None = None,
+    include_breadcrumbs: bool = True,
+) -> dict[str, Any]:
+    """Generate Schema.org JSON-LD structured data for a page.
+
+    Fetches the page, extracts title/description/OG tags/visible text, detects
+    Schema.org type (Product, Article, Organization, FAQPage, SoftwareApplication,
+    WebSite), then calls gpt-4o-mini to produce a ready-to-paste ``<script>`` block.
+    Cost-capped via MAX_COST_PER_CALL and MAX_DAILY_USD.
+
+    Args:
+        url: full URL of the page, e.g. ``https://example.com/product/widget``
+        page_type: Schema.org type override. Auto-detected if None.
+        include_breadcrumbs: if True, include BreadcrumbList when breadcrumbs found.
+    """
+    from .generators.generate_json_ld import (
+        generate_json_ld as _generate_json_ld,
+    )
+
+    return await _generate_json_ld(
+        url,
+        page_type=page_type,
+        include_breadcrumbs=include_breadcrumbs,
+    )
+
+
+@mcp.tool()
+async def generate_llms_txt(
+    domain: str,
+    crawl_depth: int = 1,
+    max_pages: int = 30,
+) -> dict[str, Any]:
+    """Generate a spec-compliant llms.txt for a domain.
+
+    Crawls the homepage + sitemap.xml (or homepage links when sitemap absent),
+    extracts page titles/descriptions/snippets, then calls gpt-4o-mini once to
+    produce llms.txt formatted per https://llmstxt.org/.
+    Cost-capped via MAX_COST_PER_CALL and MAX_DAILY_USD.
+
+    Args:
+        domain: e.g. ``example.com`` or ``https://example.com``
+        crawl_depth: 0 = homepage only; 1 = homepage + sitemap/links (default).
+        max_pages: max pages to crawl (cost ceiling).
+    """
+    from .generators.generate_llms_txt import (
+        generate_llms_txt as _generate_llms_txt,
+    )
+
+    return await _generate_llms_txt(
+        domain,
+        crawl_depth=crawl_depth,
+        max_pages=max_pages,
+    )
+
+
+@mcp.tool()
+async def generate_robots_patch(
+    domain: str,
+    allow_bots: list[str] | None = None,
+    deny_bots: list[str] | None = None,
+    preserve_existing: bool = True,
+) -> dict[str, Any]:
+    """Generate a corrected robots.txt that opens access to AI bots.
+
+    Fetches existing robots.txt, strips existing AI-bot rules, re-generates
+    them from the canonical 22-bot registry. Pure rule generation — no LLM call.
+
+    Args:
+        domain: e.g. ``example.com`` or ``https://example.com``
+        allow_bots: UA tokens to allow. ``None`` = all 22 known AI bots.
+        deny_bots: UA tokens to explicitly disallow. Takes priority over allow_bots.
+        preserve_existing: if True, preserve non-AI-bot rules from existing robots.txt.
+    """
+    from .generators.generate_robots_patch import (
+        generate_robots_patch as _generate_robots_patch,
+    )
+
+    return await _generate_robots_patch(
+        domain,
+        allow_bots=allow_bots,
+        deny_bots=deny_bots,
+        preserve_existing=preserve_existing,
+    )
 
 
 def main() -> None:

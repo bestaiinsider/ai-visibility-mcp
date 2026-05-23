@@ -101,8 +101,9 @@ async def query_perplexity(
     key = os.getenv("PERPLEXITY_API_KEY", "").strip()
     model_key = f"perplexity:{model}"
     if not key:
-        return LLMAnswer("perplexity", model, "", [], False, None, 0.0, 0, 0,
-                         error="PERPLEXITY_API_KEY missing")
+        return LLMAnswer(
+            "perplexity", model, "", [], False, None, 0.0, 0, 0, error="PERPLEXITY_API_KEY missing"
+        )
     try:
         data = await _post_json(
             PERPLEXITY_URL,
@@ -114,8 +115,18 @@ async def query_perplexity(
             },
         )
     except httpx.HTTPError as exc:
-        return LLMAnswer("perplexity", model, "", [], False, None, 0.0, 0, 0,
-                         error=f"{exc.__class__.__name__}: {exc}")
+        return LLMAnswer(
+            "perplexity",
+            model,
+            "",
+            [],
+            False,
+            None,
+            0.0,
+            0,
+            0,
+            error=f"{exc.__class__.__name__}: {exc}",
+        )
 
     text = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
     citations = data.get("citations") or data.get("search_results") or []
@@ -126,10 +137,15 @@ async def query_perplexity(
     tokens_out = int(usage.get("completion_tokens", 0))
     mentioned, alias = _mention_check(text, brand, aliases)
     return LLMAnswer(
-        provider="perplexity", model=model, text=text, citations=citations,
-        mentioned=mentioned, matched_alias=alias,
+        provider="perplexity",
+        model=model,
+        text=text,
+        citations=citations,
+        mentioned=mentioned,
+        matched_alias=alias,
         est_cost_usd=_est_cost(model_key, tokens_in, tokens_out),
-        tokens_in=tokens_in, tokens_out=tokens_out,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
     )
 
 
@@ -139,15 +155,16 @@ async def query_openrouter(
     key = os.getenv("OPENROUTER_API_KEY", "").strip()
     model_key = f"openrouter:{model}"
     if not key:
-        return LLMAnswer("openrouter", model, "", [], False, None, 0.0, 0, 0,
-                         error="OPENROUTER_API_KEY missing")
+        return LLMAnswer(
+            "openrouter", model, "", [], False, None, 0.0, 0, 0, error="OPENROUTER_API_KEY missing"
+        )
     try:
         data = await _post_json(
             OPENROUTER_URL,
             {
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/krissanders/ai-visibility-mcp",
+                "HTTP-Referer": "https://github.com/bestaiinsider/ai-visibility-mcp",
                 "X-Title": "ai-visibility-mcp",
             },
             {
@@ -157,8 +174,18 @@ async def query_openrouter(
             },
         )
     except httpx.HTTPError as exc:
-        return LLMAnswer("openrouter", model, "", [], False, None, 0.0, 0, 0,
-                         error=f"{exc.__class__.__name__}: {exc}")
+        return LLMAnswer(
+            "openrouter",
+            model,
+            "",
+            [],
+            False,
+            None,
+            0.0,
+            0,
+            0,
+            error=f"{exc.__class__.__name__}: {exc}",
+        )
 
     text = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
     usage = data.get("usage", {}) or {}
@@ -166,10 +193,15 @@ async def query_openrouter(
     tokens_out = int(usage.get("completion_tokens", 0))
     mentioned, alias = _mention_check(text, brand, aliases)
     return LLMAnswer(
-        provider="openrouter", model=model, text=text, citations=[],
-        mentioned=mentioned, matched_alias=alias,
+        provider="openrouter",
+        model=model,
+        text=text,
+        citations=[],
+        mentioned=mentioned,
+        matched_alias=alias,
         est_cost_usd=_est_cost(model_key, tokens_in, tokens_out),
-        tokens_in=tokens_in, tokens_out=tokens_out,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
     )
 
 
@@ -225,10 +257,11 @@ def record_spend(amount_usd: float) -> float:
         except (OSError, json.JSONDecodeError):
             data = {}
     cutoff_ts = time.time() - 14 * 86400
-    data = {
-        k: v for k, v in data.items()
-        if time.mktime(time.strptime(k, "%Y-%m-%d")) >= cutoff_ts
-    } if data else {}
+    data = (
+        {k: v for k, v in data.items() if time.mktime(time.strptime(k, "%Y-%m-%d")) >= cutoff_ts}
+        if data
+        else {}
+    )
     data[today] = data.get(today, 0.0) + amount_usd
     p.write_text(json.dumps(data, indent=2, sort_keys=True))
     return data[today]
