@@ -9,7 +9,11 @@ def test_empty_spa_shell_detected():
 
 
 def test_server_rendered_not_flagged():
-    html = "<html><body>" + ("<p>Real product copy explaining the value proposition. " * 30) + "</p></body></html>"
+    html = (
+        "<html><body>"
+        + ("<p>Real product copy explaining the value proposition. " * 30)
+        + "</p></body></html>"
+    )
     out = detect_spa_shell(html)
     assert out["likely_spa_shell"] is False
     assert out["visible_text_chars"] > 500

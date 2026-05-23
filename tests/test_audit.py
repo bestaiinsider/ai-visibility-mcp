@@ -20,14 +20,14 @@ def test_parse_meta_robots():
 
 
 def test_parse_jsonld_blocks():
-    html = '''
+    html = """
     <script type="application/ld+json">
     {"@context":"https://schema.org","@type":"Organization","name":"Acme"}
     </script>
     <script type="application/ld+json">
     {"@type":["WebPage","ItemPage"],"name":"page"}
     </script>
-    '''
+    """
     out = parse_html(html)
     assert out["jsonld_count"] == 2
     assert out["jsonld_errors"] == []
